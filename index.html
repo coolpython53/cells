@@ -62,38 +62,39 @@
 
     // 1. DATA LOADING
     async function load() {
-        console.log("Fetching data from Sheet...");
-        statusEl.innerText = "Loading Pixels...";
-        
-        try {
-            // We use 'redirect: follow' because Google Scripts redirect to a temporary result URL
-            const response = await fetch(API + "?nocache=" + Date.now(), {
-                method: 'GET',
-                redirect: 'follow'
-            });
+    console.log("Attempting to fetch pixels...");
+    statusEl.innerText = "Downloading...";
+    
+    try {
+        const response = await fetch(API + "?t=" + Date.now(), {
+            method: 'GET',
+            redirect: 'follow'
+        });
 
-            if (!response.ok) throw new Error("Network response was not ok");
+        const data = await response.json();
+        console.log("Raw data from Google:", data);
 
-            const data = await response.json();
-            console.log("Success! Received " + data.length + " pixels.");
+        if (data.length === 0) {
+            console.warn("The script returned 0 pixels. Is the sheet empty?");
+            statusEl.innerText = "Ready (Empty)";
+        } else {
+            statusEl.innerText = `Loaded ${data.length} px`;
             
-            // Clear canvas to white
+            // Draw
             ctx.fillStyle = "#ffffff";
             ctx.fillRect(0, 0, 1000, 1000);
-
-            // Paint saved pixels
             data.forEach(p => {
                 ctx.fillStyle = p.color;
                 ctx.fillRect(p.x, p.y, 1, 1);
             });
-            
-            checkCooldown();
-        } catch(e) {
-            console.error("LOAD ERROR:", e);
-            statusEl.innerText = "Load Failed";
-            checkCooldown();
         }
+        checkCooldown();
+    } catch(e) {
+        console.error("Fetch failed:", e);
+        statusEl.innerText = "Connection Error";
+        checkCooldown();
     }
+}
 
     // 2. ANTI-BYPASS COOLDOWN (LocalStorage)
     function checkCooldown() {
