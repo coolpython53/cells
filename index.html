@@ -1,149 +1,117 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Secure Million Pixel Grid</title>
+    <title>Pixel Grid</title>
     <style>
-        body { font-family: system-ui, -apple-system, sans-serif; background: #1a1a1a; color: white; display: flex; flex-direction: column; align-items: center; margin: 0; overflow: hidden; }
-        #toolbar { background: #333; width: 100%; padding: 15px; display: flex; justify-content: center; gap: 20px; align-items: center; z-index: 10; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
-        .canvas-container { position: relative; width: 100vw; height: 100vh; overflow: auto; background: #222; cursor: crosshair; }
-        canvas { 
-            background-color: #fff;
-            image-rendering: pixelated; /* Keeps pixels sharp when zoomed */
-        }
-        #timer { font-weight: bold; padding: 5px 10px; border-radius: 4px; background: #444; min-width: 80px; text-align: center; }
-        .ready { color: #4caf50; }
-        .waiting { color: #ff5252; border: 1px solid #ff5252; }
-        input[type="color"] { border: none; width: 40px; height: 40px; cursor: pointer; background: none; }
+        body { margin: 0; background: #222; color: white; font-family: sans-serif; text-align: center; }
+        #nav { background: #333; padding: 10px; position: sticky; top: 0; z-index: 100; display: flex; justify-content: center; gap: 15px; align-items: center; }
+        #container { width: 100vw; height: calc(100vh - 60px); overflow: auto; background: #444; }
+        canvas { background: white; image-rendering: pixelated; cursor: crosshair; display: block; margin: 0 auto; }
+        .ready { color: #0f0; } .busy { color: #f00; }
     </style>
 </head>
 <body>
 
-<div id="toolbar">
-    <input type="color" id="colorPicker" value="#ff0000">
-    <div id="coords">X: 0, Y: 0</div>
-    <div id="timer" class="ready">Loading...</div>
+<div id="nav">
+    <input type="color" id="picker" value="#ff0000">
+    <div id="status" class="ready">Ready</div>
+    <div id="timer">0s</div>
 </div>
 
-<div class="canvas-container">
-    <canvas id="gridCanvas" width="1000" height="1000" style="width: 3000px; height: 3000px;"></canvas>
+<div id="container">
+    <canvas id="cv" width="1000" height="1000" style="width:2000px; height:2000px;"></canvas>
 </div>
 
 <script>
-    const canvas = document.getElementById('gridCanvas');
+    const API = "https://script.google.com/macros/s/AKfycbxUhcHKbXAvsP_KhDTDc9AOWgaifOz6NTS0GGbTIG-9vBIcN1z3k7Hf5E9eivHMfIiutA/exec";
+    const TOKEN = "1341323124312432141342312431427646";
+    const canvas = document.getElementById('cv');
     const ctx = canvas.getContext('2d');
-    const colorPicker = document.getElementById('colorPicker');
-    const timerDisplay = document.getElementById('timer');
-    const coordsDisplay = document.getElementById('coords');
+    const timerEl = document.getElementById('timer');
+    const statusEl = document.getElementById('status');
+    let canClick = false;
 
-    // --- CONFIGURATION ---
-    const API_URL = "https://script.google.com/macros/s/AKfycbxUhcHKbXAvsP_KhDTDc9AOWgaifOz6NTS0GGbTIG-9vBIcN1z3k7Hf5E9eivHMfIiutA/exec";
-    const AUTH_TOKEN = "19461349634"; // Must match your Google Script!
-    const COOLDOWN_MS = 40000; // 40 seconds in milliseconds
-    
-    let canEdit = false;
-
-    // 1. Initial Load: Get pixels from Google Sheet
-    async function loadCanvas() {
+    // 1. Load Data
+    async function load() {
+        statusEl.innerText = "Loading Sheet...";
         try {
-            const resp = await fetch(API_URL + "?t=" + Date.now());
-            const pixels = await resp.json();
-            
-            // Clear to white first
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, 1000, 1000);
-
-            pixels.forEach(p => {
+            const r = await fetch(API + "?t=" + Date.now());
+            const data = await r.json();
+            data.forEach(p => {
                 ctx.fillStyle = p.color;
                 ctx.fillRect(p.x, p.y, 1, 1);
             });
-            checkCooldown(); // Start checking timer after load
-        } catch (e) {
-            console.error("Load failed:", e);
-            timerDisplay.innerText = "Load Error";
-            checkCooldown(); 
+            checkTime();
+        } catch(e) {
+            console.error(e);
+            statusEl.innerText = "Load Failed";
+            checkTime();
         }
     }
 
-    // 2. Cooldown Logic using LocalStorage
-    function checkCooldown() {
-        const lastClick = localStorage.getItem('lastPixelClick');
-        const now = Date.now();
-
-        if (lastClick && (now - lastClick < COOLDOWN_MS)) {
-            const remaining = Math.ceil((COOLDOWN_MS - (now - lastClick)) / 1000);
-            startTimer(remaining);
+    // 2. Timer Logic (Persists through reload)
+    function checkTime() {
+        const last = localStorage.getItem('last_px');
+        const diff = Date.now() - (last || 0);
+        if (diff < 40000) {
+            startTimer(Math.ceil((40000 - diff) / 1000));
         } else {
-            setReady();
+            ready();
         }
     }
 
-    function startTimer(seconds) {
-        canEdit = false;
-        timerDisplay.className = 'waiting';
-        
-        const countdown = setInterval(() => {
-            seconds--;
-            timerDisplay.innerText = `${seconds}s`;
-            if (seconds <= 0) {
-                clearInterval(countdown);
-                setReady();
+    function startTimer(s) {
+        canClick = false;
+        statusEl.innerText = "Cooldown";
+        statusEl.className = "busy";
+        const iv = setInterval(() => {
+            s--;
+            timerEl.innerText = s + "s";
+            if (s <= 0) {
+                clearInterval(iv);
+                ready();
             }
         }, 1000);
     }
 
-    function setReady() {
-        canEdit = true;
-        timerDisplay.innerText = "Ready";
-        timerDisplay.className = 'ready';
+    function ready() {
+        canClick = true;
+        statusEl.innerText = "Ready";
+        statusEl.className = "ready";
+        timerEl.innerText = "0s";
     }
 
-    // 3. Click Handling
+    // 3. Click to Save
     canvas.addEventListener('click', async (e) => {
-        if (!canEdit) return;
+        if (!canClick) return;
 
         const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        const x = Math.floor((e.clientX - rect.left) * scaleX);
-        const y = Math.floor((e.clientY - rect.top) * scaleY);
-        const color = colorPicker.value;
+        const x = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
+        const y = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
+        const color = document.getElementById('picker').value;
 
-        // Save timestamp immediately to prevent rapid-fire clicks
-        localStorage.setItem('lastPixelClick', Date.now());
-        startTimer(40);
-
-        // Optimistic UI update (draw immediately)
+        // Visual update
         ctx.fillStyle = color;
         ctx.fillRect(x, y, 1, 1);
 
-        // Send to Backend
+        // Lock & Save
+        localStorage.setItem('last_px', Date.now());
+        startTimer(40);
+
         try {
-            await fetch(API_URL, {
-                method: 'POST',
-                mode: 'no-cors',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ x, y, color, token: AUTH_TOKEN })
+            // POST to Google
+            await fetch(API, {
+                method: "POST",
+                mode: "no-cors", 
+                body: JSON.stringify({ x, y, color, token: TOKEN })
             });
-        } catch (err) {
-            console.error("Save failed:", err);
+            console.log("Sent request for:", x, y);
+        } catch(err) {
+            alert("Save failed! Check console.");
         }
     });
 
-    // Mouse Tracking
-    canvas.addEventListener('mousemove', (e) => {
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        const x = Math.floor((e.clientX - rect.left) * scaleX);
-        const y = Math.floor((e.clientY - rect.top) * scaleY);
-        coordsDisplay.innerText = `X: ${x}, Y: ${y}`;
-    });
-
-    // Launch
-    loadCanvas();
+    load();
 </script>
-
 </body>
 </html>
