@@ -1,117 +1,133 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Pixel Grid</title>
+    <title>Pixel Grid 1000x1000</title>
     <style>
-        body { margin: 0; background: #222; color: white; font-family: sans-serif; text-align: center; }
-        #nav { background: #333; padding: 10px; position: sticky; top: 0; z-index: 100; display: flex; justify-content: center; gap: 15px; align-items: center; }
-        #container { width: 100vw; height: calc(100vh - 60px); overflow: auto; background: #444; }
-        canvas { background: white; image-rendering: pixelated; cursor: crosshair; display: block; margin: 0 auto; }
-        .ready { color: #0f0; } .busy { color: #f00; }
+        body { margin: 0; background: #1a1a1a; color: white; font-family: sans-serif; overflow: hidden; }
+        #header { background: #333; height: 60px; display: flex; align-items: center; justify-content: center; gap: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.5); position: relative; z-index: 10; }
+        #view-port { width: 100vw; height: calc(100vh - 60px); overflow: auto; background: #222; }
+        canvas { background: #fff; image-rendering: pixelated; cursor: crosshair; display: block; margin: 0 auto; }
+        .stat { padding: 5px 12px; border-radius: 4px; background: #444; font-size: 14px; }
+        #status.ready { color: #4caf50; }
+        #status.wait { color: #ff5252; }
     </style>
 </head>
 <body>
 
-<div id="nav">
-    <input type="color" id="picker" value="#ff0000">
-    <div id="status" class="ready">Ready</div>
-    <div id="timer">0s</div>
+<div id="header">
+    <input type="color" id="colorPicker" value="#ff0000">
+    <div id="status" class="ready">Initializing...</div>
+    <div id="timer" class="stat">0s</div>
+    <div id="coords" class="stat">X: 0, Y: 0</div>
 </div>
 
-<div id="container">
-    <canvas id="cv" width="1000" height="1000" style="width:2000px; height:2000px;"></canvas>
+<div id="view-port">
+    <canvas id="mainCanvas" width="1000" height="1000" style="width:2000px; height:2000px;"></canvas>
 </div>
 
 <script>
     const API = "https://script.google.com/macros/s/AKfycbxUhcHKbXAvsP_KhDTDc9AOWgaifOz6NTS0GGbTIG-9vBIcN1z3k7Hf5E9eivHMfIiutA/exec";
     const TOKEN = "1341323124312432141342312431427646";
-    const canvas = document.getElementById('cv');
-    const ctx = canvas.getContext('2d');
-    const timerEl = document.getElementById('timer');
+    
+    const cv = document.getElementById('mainCanvas');
+    const ctx = cv.getContext('2d');
     const statusEl = document.getElementById('status');
-    let canClick = false;
+    const timerEl = document.getElementById('timer');
+    
+    let canDraw = false;
 
-    // 1. Load Data
-    async function load() {
-        statusEl.innerText = "Loading Sheet...";
+    // Load existing pixels
+    async function init() {
+        statusEl.innerText = "Loading Canvas...";
         try {
-            const r = await fetch(API + "?t=" + Date.now());
+            const r = await fetch(API + "?nocache=" + Date.now());
             const data = await r.json();
+            
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, 1000, 1000);
+
             data.forEach(p => {
                 ctx.fillStyle = p.color;
                 ctx.fillRect(p.x, p.y, 1, 1);
             });
-            checkTime();
+            
+            checkCooldown();
         } catch(e) {
-            console.error(e);
-            statusEl.innerText = "Load Failed";
-            checkTime();
+            console.error("Load failed", e);
+            statusEl.innerText = "Connection Error";
+            checkCooldown();
         }
     }
 
-    // 2. Timer Logic (Persists through reload)
-    function checkTime() {
-        const last = localStorage.getItem('last_px');
-        const diff = Date.now() - (last || 0);
-        if (diff < 40000) {
-            startTimer(Math.ceil((40000 - diff) / 1000));
+    function checkCooldown() {
+        const last = localStorage.getItem('pixel_timestamp');
+        const now = Date.now();
+        const waitTime = 40000;
+
+        if (last && (now - last < waitTime)) {
+            startCountdown(Math.ceil((waitTime - (now - last)) / 1000));
         } else {
-            ready();
+            setReady();
         }
     }
 
-    function startTimer(s) {
-        canClick = false;
+    function startCountdown(s) {
+        canDraw = false;
         statusEl.innerText = "Cooldown";
-        statusEl.className = "busy";
-        const iv = setInterval(() => {
+        statusEl.className = "wait";
+        const tick = setInterval(() => {
             s--;
             timerEl.innerText = s + "s";
             if (s <= 0) {
-                clearInterval(iv);
-                ready();
+                clearInterval(tick);
+                setReady();
             }
         }, 1000);
     }
 
-    function ready() {
-        canClick = true;
+    function setReady() {
+        canDraw = true;
         statusEl.innerText = "Ready";
         statusEl.className = "ready";
         timerEl.innerText = "0s";
     }
 
-    // 3. Click to Save
-    canvas.addEventListener('click', async (e) => {
-        if (!canClick) return;
+    cv.addEventListener('click', async (e) => {
+        if (!canDraw) return;
 
-        const rect = canvas.getBoundingClientRect();
-        const x = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
-        const y = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
-        const color = document.getElementById('picker').value;
+        const rect = cv.getBoundingClientRect();
+        const x = Math.floor((e.clientX - rect.left) * (cv.width / rect.width));
+        const y = Math.floor((e.clientY - rect.top) * (cv.height / rect.height));
+        const color = document.getElementById('colorPicker').value;
 
-        // Visual update
+        // Draw locally immediately
         ctx.fillStyle = color;
         ctx.fillRect(x, y, 1, 1);
 
-        // Lock & Save
-        localStorage.setItem('last_px', Date.now());
-        startTimer(40);
+        // Set cooldown
+        localStorage.setItem('pixel_timestamp', Date.now());
+        startCountdown(40);
 
+        // Upload
         try {
-            // POST to Google
             await fetch(API, {
                 method: "POST",
-                mode: "no-cors", 
+                mode: "no-cors",
                 body: JSON.stringify({ x, y, color, token: TOKEN })
             });
-            console.log("Sent request for:", x, y);
         } catch(err) {
-            alert("Save failed! Check console.");
+            console.error("Upload failed");
         }
     });
 
-    load();
+    cv.addEventListener('mousemove', (e) => {
+        const rect = cv.getBoundingClientRect();
+        const x = Math.floor((e.clientX - rect.left) * (cv.width / rect.width));
+        const y = Math.floor((e.clientY - rect.top) * (cv.height / rect.height));
+        document.getElementById('coords').innerText = `X: ${x}, Y: ${y}`;
+    });
+
+    init();
 </script>
 </body>
 </html>
