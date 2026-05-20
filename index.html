@@ -3,15 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Million Pixel Grid</title>
+    <title>Secure Million Pixel Grid</title>
     <style>
         body { font-family: system-ui, -apple-system, sans-serif; background: #1a1a1a; color: white; display: flex; flex-direction: column; align-items: center; margin: 0; overflow: hidden; }
         #toolbar { background: #333; width: 100%; padding: 15px; display: flex; justify-content: center; gap: 20px; align-items: center; z-index: 10; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
         .canvas-container { position: relative; width: 100vw; height: 100vh; overflow: auto; background: #222; cursor: crosshair; }
-        canvas { background-image: linear-gradient(45deg, #2b2b2b 25%, transparent 25%), linear-gradient(-45deg, #2b2b2b 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2b2b2b 75%), linear-gradient(-45deg, transparent 75%, #2b2b2b 75%); background-size: 20px 20px; background-position: 0 0, 0 10px, 10px -10px, -10px 0px; }
+        canvas { 
+            background-color: #fff;
+            image-rendering: pixelated; /* Keeps pixels sharp when zoomed */
+        }
         #timer { font-weight: bold; padding: 5px 10px; border-radius: 4px; background: #444; min-width: 80px; text-align: center; }
         .ready { color: #4caf50; }
-        .waiting { color: #ff5252; }
+        .waiting { color: #ff5252; border: 1px solid #ff5252; }
+        input[type="color"] { border: none; width: 40px; height: 40px; cursor: pointer; background: none; }
     </style>
 </head>
 <body>
@@ -19,11 +23,11 @@
 <div id="toolbar">
     <input type="color" id="colorPicker" value="#ff0000">
     <div id="coords">X: 0, Y: 0</div>
-    <div id="timer" class="ready">Ready</div>
+    <div id="timer" class="ready">Loading...</div>
 </div>
 
 <div class="canvas-container">
-    <canvas id="gridCanvas" width="1000" height="1000" style="width: 2000px; height: 2000px;"></canvas>
+    <canvas id="gridCanvas" width="1000" height="1000" style="width: 3000px; height: 3000px;"></canvas>
 </div>
 
 <script>
@@ -33,36 +37,69 @@
     const timerDisplay = document.getElementById('timer');
     const coordsDisplay = document.getElementById('coords');
 
+    // --- CONFIGURATION ---
     const API_URL = "https://script.google.com/macros/s/AKfycbxUhcHKbXAvsP_KhDTDc9AOWgaifOz6NTS0GGbTIG-9vBIcN1z3k7Hf5E9eivHMfIiutA/exec";
+    const AUTH_TOKEN = "19461349634"; // Must match your Google Script!
+    const COOLDOWN_MS = 40000; // 40 seconds in milliseconds
     
-    let canEdit = true;
-    const COOLDOWN_TIME = 40;
+    let canEdit = false;
 
-    // Load initial data from sheet
+    // 1. Initial Load: Get pixels from Google Sheet
     async function loadCanvas() {
         try {
-            const resp = await fetch(API_URL);
-            const grid = await resp.json();
-            grid.forEach((row, y) => {
-                row.forEach((color, x) => {
-                    if (color && color !== '#ffffff') {
-                        ctx.fillStyle = color;
-                        ctx.fillRect(x, y, 1, 1);
-                    }
-                });
+            const resp = await fetch(API_URL + "?t=" + Date.now());
+            const pixels = await resp.json();
+            
+            // Clear to white first
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, 1000, 1000);
+
+            pixels.forEach(p => {
+                ctx.fillStyle = p.color;
+                ctx.fillRect(p.x, p.y, 1, 1);
             });
-        } catch (e) { console.log("Initial load skipped or failed."); }
+            checkCooldown(); // Start checking timer after load
+        } catch (e) {
+            console.error("Load failed:", e);
+            timerDisplay.innerText = "Load Error";
+            checkCooldown(); 
+        }
     }
 
-    canvas.addEventListener('mousemove', (e) => {
-        const rect = canvas.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
-        const x = Math.floor((e.clientX - rect.left) * scaleX);
-        const y = Math.floor((e.clientY - rect.top) * scaleY);
-        coordsDisplay.innerText = `X: ${x}, Y: ${y}`;
-    });
+    // 2. Cooldown Logic using LocalStorage
+    function checkCooldown() {
+        const lastClick = localStorage.getItem('lastPixelClick');
+        const now = Date.now();
 
+        if (lastClick && (now - lastClick < COOLDOWN_MS)) {
+            const remaining = Math.ceil((COOLDOWN_MS - (now - lastClick)) / 1000);
+            startTimer(remaining);
+        } else {
+            setReady();
+        }
+    }
+
+    function startTimer(seconds) {
+        canEdit = false;
+        timerDisplay.className = 'waiting';
+        
+        const countdown = setInterval(() => {
+            seconds--;
+            timerDisplay.innerText = `${seconds}s`;
+            if (seconds <= 0) {
+                clearInterval(countdown);
+                setReady();
+            }
+        }, 1000);
+    }
+
+    function setReady() {
+        canEdit = true;
+        timerDisplay.innerText = "Ready";
+        timerDisplay.className = 'ready';
+    }
+
+    // 3. Click Handling
     canvas.addEventListener('click', async (e) => {
         if (!canEdit) return;
 
@@ -73,42 +110,38 @@
         const y = Math.floor((e.clientY - rect.top) * scaleY);
         const color = colorPicker.value;
 
-        // Visual update
+        // Save timestamp immediately to prevent rapid-fire clicks
+        localStorage.setItem('lastPixelClick', Date.now());
+        startTimer(40);
+
+        // Optimistic UI update (draw immediately)
         ctx.fillStyle = color;
         ctx.fillRect(x, y, 1, 1);
 
-        // API update
-        startCooldown();
-        
+        // Send to Backend
         try {
             await fetch(API_URL, {
                 method: 'POST',
-                mode: 'no-cors', // Essential for Google Apps Script
+                mode: 'no-cors',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ x, y, color })
+                body: JSON.stringify({ x, y, color, token: AUTH_TOKEN })
             });
         } catch (err) {
             console.error("Save failed:", err);
         }
     });
 
-    function startCooldown() {
-        canEdit = false;
-        let remaining = COOLDOWN_TIME;
-        timerDisplay.className = 'waiting';
-        
-        const interval = setInterval(() => {
-            remaining--;
-            timerDisplay.innerText = `${remaining}s`;
-            if (remaining <= 0) {
-                clearInterval(interval);
-                canEdit = true;
-                timerDisplay.innerText = "Ready";
-                timerDisplay.className = 'ready';
-            }
-        }, 1000);
-    }
+    // Mouse Tracking
+    canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = Math.floor((e.clientX - rect.left) * scaleX);
+        const y = Math.floor((e.clientY - rect.top) * scaleY);
+        coordsDisplay.innerText = `X: ${x}, Y: ${y}`;
+    });
 
+    // Launch
     loadCanvas();
 </script>
 
