@@ -1,87 +1,116 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Million Cell Canvas</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Million Pixel Grid</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #f0f0f0; }
-        #controls { margin: 10px; padding: 10px; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        canvas { border: 1px solid #000; background: white; cursor: crosshair; }
-        #timer { font-weight: bold; color: #d32f2f; }
+        body { font-family: system-ui, -apple-system, sans-serif; background: #1a1a1a; color: white; display: flex; flex-direction: column; align-items: center; margin: 0; overflow: hidden; }
+        #toolbar { background: #333; width: 100%; padding: 15px; display: flex; justify-content: center; gap: 20px; align-items: center; z-index: 10; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+        .canvas-container { position: relative; width: 100vw; height: 100vh; overflow: auto; background: #222; cursor: crosshair; }
+        canvas { background-image: linear-gradient(45deg, #2b2b2b 25%, transparent 25%), linear-gradient(-45deg, #2b2b2b 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2b2b2b 75%), linear-gradient(-45deg, transparent 75%, #2b2b2b 75%); background-size: 20px 20px; background-position: 0 0, 0 10px, 10px -10px, -10px 0px; }
+        #timer { font-weight: bold; padding: 5px 10px; border-radius: 4px; background: #444; min-width: 80px; text-align: center; }
+        .ready { color: #4caf50; }
+        .waiting { color: #ff5252; }
     </style>
 </head>
 <body>
 
-    <div id="controls">
-        <input type="color" id="colorPicker" value="#000000">
-        <span id="coords">X: 0, Y: 0</span>
-        | Next click in: <span id="timer">Ready</span>
-    </div>
+<div id="toolbar">
+    <input type="color" id="colorPicker" value="#ff0000">
+    <div id="coords">X: 0, Y: 0</div>
+    <div id="timer" class="ready">Ready</div>
+</div>
 
-    <canvas id="gridCanvas" width="1000" height="1000"></canvas>
+<div class="canvas-container">
+    <canvas id="gridCanvas" width="1000" height="1000" style="width: 2000px; height: 2000px;"></canvas>
+</div>
 
-    <script>
-        const canvas = document.getElementById('gridCanvas');
-        const ctx = canvas.getContext('2d');
-        const colorPicker = document.getElementById('colorPicker');
-        const timerDisplay = document.getElementById('timer');
-        const API_URL = 'https://script.google.com/macros/s/AKfycbxUhcHKbXAvsP_KhDTDc9AOWgaifOz6NTS0GGbTIG-9vBIcN1z3k7Hf5E9eivHMfIiutA/exec';
-        
-        let canPixel = true;
-        let cooldown = 40;
+<script>
+    const canvas = document.getElementById('gridCanvas');
+    const ctx = canvas.getContext('2d');
+    const colorPicker = document.getElementById('colorPicker');
+    const timerDisplay = document.getElementById('timer');
+    const coordsDisplay = document.getElementById('coords');
 
-        // Initialize Canvas with "transparent" (white)
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, 1000, 1000);
+    const API_URL = "https://script.google.com/macros/s/AKfycbxUhcHKbXAvsP_KhDTDc9AOWgaifOz6NTS0GGbTIG-9vBIcN1z3k7Hf5E9eivHMfIiutA/exec";
+    
+    let canEdit = true;
+    const COOLDOWN_TIME = 40;
 
-        canvas.addEventListener('click', (e) => {
-            if (!canPixel) return;
-
-            const rect = canvas.getBoundingClientRect();
-            const x = Math.floor(e.clientX - rect.left);
-            const y = Math.floor(e.clientY - rect.top);
-            const color = colorPicker.value;
-
-            drawPixel(x, y, color);
-            uploadPixel(x, y, color);
-            startCooldown();
-        });
-
-        function drawPixel(x, y, color) {
-            ctx.fillStyle = color;
-            ctx.fillRect(x, y, 1, 1);
-        }
-
-        async function uploadPixel(x, y, color) {
-            try {
-                await fetch(API_URL, {
-                    method: 'POST',
-                    body: JSON.stringify({ x, y, color })
+    // Load initial data from sheet
+    async function loadCanvas() {
+        try {
+            const resp = await fetch(API_URL);
+            const grid = await resp.json();
+            grid.forEach((row, y) => {
+                row.forEach((color, x) => {
+                    if (color && color !== '#ffffff') {
+                        ctx.fillStyle = color;
+                        ctx.fillRect(x, y, 1, 1);
+                    }
                 });
-            } catch (err) {
-                console.error("Upload failed", err);
+            });
+        } catch (e) { console.log("Initial load skipped or failed."); }
+    }
+
+    canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = Math.floor((e.clientX - rect.left) * scaleX);
+        const y = Math.floor((e.clientY - rect.top) * scaleY);
+        coordsDisplay.innerText = `X: ${x}, Y: ${y}`;
+    });
+
+    canvas.addEventListener('click', async (e) => {
+        if (!canEdit) return;
+
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = Math.floor((e.clientX - rect.left) * scaleX);
+        const y = Math.floor((e.clientY - rect.top) * scaleY);
+        const color = colorPicker.value;
+
+        // Visual update
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y, 1, 1);
+
+        // API update
+        startCooldown();
+        
+        try {
+            await fetch(API_URL, {
+                method: 'POST',
+                mode: 'no-cors', // Essential for Google Apps Script
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ x, y, color })
+            });
+        } catch (err) {
+            console.error("Save failed:", err);
+        }
+    });
+
+    function startCooldown() {
+        canEdit = false;
+        let remaining = COOLDOWN_TIME;
+        timerDisplay.className = 'waiting';
+        
+        const interval = setInterval(() => {
+            remaining--;
+            timerDisplay.innerText = `${remaining}s`;
+            if (remaining <= 0) {
+                clearInterval(interval);
+                canEdit = true;
+                timerDisplay.innerText = "Ready";
+                timerDisplay.className = 'ready';
             }
-        }
+        }, 1000);
+    }
 
-        function startCooldown() {
-            canPixel = false;
-            let timeLeft = cooldown;
-            const interval = setInterval(() => {
-                timeLeft--;
-                timerDisplay.innerText = `${timeLeft}s`;
-                if (timeLeft <= 0) {
-                    clearInterval(interval);
-                    canPixel = true;
-                    timerDisplay.innerText = "Ready";
-                }
-            }, 1000);
-        }
+    loadCanvas();
+</script>
 
-        // Mouse move to show coordinates
-        canvas.addEventListener('mousemove', (e) => {
-            const rect = canvas.getBoundingClientRect();
-            document.getElementById('coords').innerText = 
-                `X: ${Math.floor(e.clientX - rect.left)}, Y: ${Math.floor(e.clientY - rect.top)}`;
-        });
-    </script>
 </body>
 </html>
