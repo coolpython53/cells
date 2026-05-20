@@ -1,28 +1,52 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pixel Grid 1000x1000</title>
     <style>
         body { margin: 0; background: #1a1a1a; color: white; font-family: sans-serif; overflow: hidden; }
-        #header { background: #333; height: 60px; display: flex; align-items: center; justify-content: center; gap: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.5); position: relative; z-index: 10; }
-        #view-port { width: 100vw; height: calc(100vh - 60px); overflow: auto; background: #222; }
-        canvas { background: #fff; image-rendering: pixelated; cursor: crosshair; display: block; margin: 0 auto; }
-        .stat { padding: 5px 12px; border-radius: 4px; background: #444; font-size: 14px; }
+        #header { 
+            background: #333; 
+            height: 60px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            gap: 20px; 
+            z-index: 10; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+        }
+        #view-port { 
+            width: 100vw; 
+            height: calc(100vh - 60px); 
+            overflow: auto; 
+            background: #222; 
+        }
+        canvas { 
+            background: #ffffff; 
+            image-rendering: pixelated; 
+            cursor: crosshair; 
+            display: block; 
+            margin: 0 auto; 
+            box-shadow: 0 0 20px rgba(0,0,0,0.5); 
+        }
+        .stat { padding: 5px 12px; border-radius: 4px; background: #444; font-size: 14px; min-width: 60px; text-align: center; }
         #status.ready { color: #4caf50; }
         #status.wait { color: #ff5252; }
+        input[type="color"] { border: none; width: 40px; height: 40px; cursor: pointer; background: none; }
     </style>
 </head>
 <body>
 
 <div id="header">
     <input type="color" id="colorPicker" value="#ff0000">
-    <div id="status" class="ready">Initializing...</div>
-    <div id="timer" class="stat">0s</div>
+    <div id="status" class="wait">Connecting...</div>
+    <div id="timer" class="stat">--</div>
     <div id="coords" class="stat">X: 0, Y: 0</div>
 </div>
 
 <div id="view-port">
-    <canvas id="mainCanvas" width="1000" height="1000" style="width:2000px; height:2000px;"></canvas>
+    <canvas id="mainCanvas" width="1000" height="1000" style="width:3000px; height:3000px;"></canvas>
 </div>
 
 <script>
@@ -36,16 +60,28 @@
     
     let canDraw = false;
 
-    // Load existing pixels
-    async function init() {
-        statusEl.innerText = "Loading Canvas...";
+    // 1. DATA LOADING
+    async function load() {
+        console.log("Fetching data from Sheet...");
+        statusEl.innerText = "Loading Pixels...";
+        
         try {
-            const r = await fetch(API + "?nocache=" + Date.now());
-            const data = await r.json();
+            // We use 'redirect: follow' because Google Scripts redirect to a temporary result URL
+            const response = await fetch(API + "?nocache=" + Date.now(), {
+                method: 'GET',
+                redirect: 'follow'
+            });
+
+            if (!response.ok) throw new Error("Network response was not ok");
+
+            const data = await response.json();
+            console.log("Success! Received " + data.length + " pixels.");
             
+            // Clear canvas to white
             ctx.fillStyle = "#ffffff";
             ctx.fillRect(0, 0, 1000, 1000);
 
+            // Paint saved pixels
             data.forEach(p => {
                 ctx.fillStyle = p.color;
                 ctx.fillRect(p.x, p.y, 1, 1);
@@ -53,19 +89,21 @@
             
             checkCooldown();
         } catch(e) {
-            console.error("Load failed", e);
-            statusEl.innerText = "Connection Error";
+            console.error("LOAD ERROR:", e);
+            statusEl.innerText = "Load Failed";
             checkCooldown();
         }
     }
 
+    // 2. ANTI-BYPASS COOLDOWN (LocalStorage)
     function checkCooldown() {
         const last = localStorage.getItem('pixel_timestamp');
         const now = Date.now();
-        const waitTime = 40000;
+        const diff = now - (last || 0);
+        const cooldownMs = 40000;
 
-        if (last && (now - last < waitTime)) {
-            startCountdown(Math.ceil((waitTime - (now - last)) / 1000));
+        if (last && (diff < cooldownMs)) {
+            startCountdown(Math.ceil((cooldownMs - diff) / 1000));
         } else {
             setReady();
         }
@@ -73,7 +111,7 @@
 
     function startCountdown(s) {
         canDraw = false;
-        statusEl.innerText = "Cooldown";
+        statusEl.innerText = "Wait";
         statusEl.className = "wait";
         const tick = setInterval(() => {
             s--;
@@ -89,9 +127,10 @@
         canDraw = true;
         statusEl.innerText = "Ready";
         statusEl.className = "ready";
-        timerEl.innerText = "0s";
+        timerEl.innerText = "Go!";
     }
 
+    // 3. INTERACTION
     cv.addEventListener('click', async (e) => {
         if (!canDraw) return;
 
@@ -100,26 +139,29 @@
         const y = Math.floor((e.clientY - rect.top) * (cv.height / rect.height));
         const color = document.getElementById('colorPicker').value;
 
-        // Draw locally immediately
+        // Visual update (Instant)
         ctx.fillStyle = color;
         ctx.fillRect(x, y, 1, 1);
 
-        // Set cooldown
+        // Lock UI
         localStorage.setItem('pixel_timestamp', Date.now());
         startCountdown(40);
 
-        // Upload
+        // Save to Google
         try {
             await fetch(API, {
                 method: "POST",
                 mode: "no-cors",
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ x, y, color, token: TOKEN })
             });
+            console.log("Saved pixel at X:" + x + " Y:" + y);
         } catch(err) {
-            console.error("Upload failed");
+            console.error("Save failed:", err);
         }
     });
 
+    // Track mouse coordinates
     cv.addEventListener('mousemove', (e) => {
         const rect = cv.getBoundingClientRect();
         const x = Math.floor((e.clientX - rect.left) * (cv.width / rect.width));
@@ -127,7 +169,9 @@
         document.getElementById('coords').innerText = `X: ${x}, Y: ${y}`;
     });
 
-    init();
+    // Run on startup
+    load();
 </script>
+
 </body>
 </html>
