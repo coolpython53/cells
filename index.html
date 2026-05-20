@@ -2,51 +2,31 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pixel Grid 1000x1000</title>
+    <title>Live Pixel Grid 1000x1000</title>
     <style>
         body { margin: 0; background: #1a1a1a; color: white; font-family: sans-serif; overflow: hidden; }
-        #header { 
-            background: #333; 
-            height: 60px; 
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            gap: 20px; 
-            z-index: 10; 
-            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
-        }
-        #view-port { 
-            width: 100vw; 
-            height: calc(100vh - 60px); 
-            overflow: auto; 
-            background: #222; 
-        }
-        canvas { 
-            background: #ffffff; 
-            image-rendering: pixelated; 
-            cursor: crosshair; 
-            display: block; 
-            margin: 0 auto; 
-            box-shadow: 0 0 20px rgba(0,0,0,0.5); 
-        }
-        .stat { padding: 5px 12px; border-radius: 4px; background: #444; font-size: 14px; min-width: 60px; text-align: center; }
-        #status.ready { color: #4caf50; }
+        #header { background: #333; height: 60px; display: flex; align-items: center; justify-content: center; gap: 15px; z-index: 10; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+        #view-port { width: 100vw; height: calc(100vh - 60px); overflow: auto; background: #222; }
+        canvas { background: #ffffff; image-rendering: pixelated; cursor: crosshair; display: block; margin: 0 auto; }
+        .stat { padding: 5px 12px; border-radius: 4px; background: #444; font-size: 14px; min-width: 70px; text-align: center; }
+        #status.ready { color: #4caf50; font-weight: bold; }
         #status.wait { color: #ff5252; }
-        input[type="color"] { border: none; width: 40px; height: 40px; cursor: pointer; background: none; }
+        #status.syncing { color: #2196f3; }
+        input[type="color"] { border: none; width: 35px; height: 35px; cursor: pointer; background: none; }
     </style>
 </head>
 <body>
 
 <div id="header">
-    <input type="color" id="colorPicker" value="#ff0000">
+    <input type="color" id="colorPicker" value="#000000">
     <div id="status" class="wait">Connecting...</div>
     <div id="timer" class="stat">--</div>
     <div id="coords" class="stat">X: 0, Y: 0</div>
+    <button onclick="loadPixels()" style="cursor:pointer; background:#555; color:white; border:none; padding:5px 10px; border-radius:4px;">Force Sync</button>
 </div>
 
 <div id="view-port">
-    <canvas id="mainCanvas" width="1000" height="1000" style="width:3000px; height:3000px;"></canvas>
+    <canvas id="mainCanvas" width="1000" height="1000" style="width:2000px; height:2000px;"></canvas>
 </div>
 
 <script>
@@ -60,45 +40,43 @@
     
     let canDraw = false;
 
-    // 1. DATA LOADING
-    async function load() {
-    console.log("Attempting to fetch pixels...");
-    statusEl.innerText = "Downloading...";
-    
-    try {
-        const response = await fetch(API + "?t=" + Date.now(), {
-            method: 'GET',
-            redirect: 'follow'
-        });
-
-        const data = await response.json();
-        console.log("Raw data from Google:", data);
-
-        if (data.length === 0) {
-            console.warn("The script returned 0 pixels. Is the sheet empty?");
-            statusEl.innerText = "Ready (Empty)";
-        } else {
-            statusEl.innerText = `Loaded ${data.length} px`;
+    async function loadPixels() {
+        const originalStatus = statusEl.innerText;
+        statusEl.innerText = "Syncing...";
+        statusEl.className = "syncing";
+        
+        try {
+            const response = await fetch(API + "?t=" + Date.now(), { redirect: 'follow' });
+            const data = await response.json();
             
-            // Draw
+            // Clean slate
             ctx.fillStyle = "#ffffff";
             ctx.fillRect(0, 0, 1000, 1000);
-            data.forEach(p => {
-                ctx.fillStyle = p.color;
-                ctx.fillRect(p.x, p.y, 1, 1);
-            });
-        }
-        checkCooldown();
-    } catch(e) {
-        console.error("Fetch failed:", e);
-        statusEl.innerText = "Connection Error";
-        checkCooldown();
-    }
-}
 
-    // 2. ANTI-BYPASS COOLDOWN (LocalStorage)
+            // Draw every pixel found in the sheet
+            if (data && data.length > 0) {
+                data.forEach(p => {
+                    ctx.fillStyle = p.color;
+                    ctx.fillRect(parseInt(p.x), parseInt(p.y), 1, 1);
+                });
+                console.log("Sync complete. Pixels:", data.length);
+            }
+            
+            // Restore status unless we are in a cooldown
+            if (!canDraw && originalStatus === "Wait") {
+                statusEl.innerText = "Wait";
+                statusEl.className = "wait";
+            } else {
+                setReady();
+            }
+        } catch(e) {
+            console.error("Sync Error:", e);
+            statusEl.innerText = "Sync Failed";
+        }
+    }
+
     function checkCooldown() {
-        const last = localStorage.getItem('pixel_timestamp');
+        const last = localStorage.getItem('px_time');
         const now = Date.now();
         const diff = now - (last || 0);
         const cooldownMs = 40000;
@@ -126,12 +104,11 @@
 
     function setReady() {
         canDraw = true;
-        statusEl.innerText = "Ready";
         statusEl.className = "ready";
-        timerEl.innerText = "Go!";
+        statusEl.innerText = "Ready";
+        timerEl.innerText = "Ready";
     }
 
-    // 3. INTERACTION
     cv.addEventListener('click', async (e) => {
         if (!canDraw) return;
 
@@ -140,29 +117,22 @@
         const y = Math.floor((e.clientY - rect.top) * (cv.height / rect.height));
         const color = document.getElementById('colorPicker').value;
 
-        // Visual update (Instant)
+        // Local Draw (Immediate feedback)
         ctx.fillStyle = color;
         ctx.fillRect(x, y, 1, 1);
 
-        // Lock UI
-        localStorage.setItem('pixel_timestamp', Date.now());
+        // Start Cooldown
+        localStorage.setItem('px_time', Date.now());
         startCountdown(40);
 
-        // Save to Google
-        try {
-            await fetch(API, {
-                method: "POST",
-                mode: "no-cors",
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ x, y, color, token: TOKEN })
-            });
-            console.log("Saved pixel at X:" + x + " Y:" + y);
-        } catch(err) {
-            console.error("Save failed:", err);
-        }
+        // Send to Google
+        fetch(API, {
+            method: "POST",
+            mode: "no-cors",
+            body: JSON.stringify({ x, y, color, token: TOKEN })
+        }).catch(err => console.error("Post error"));
     });
 
-    // Track mouse coordinates
     cv.addEventListener('mousemove', (e) => {
         const rect = cv.getBoundingClientRect();
         const x = Math.floor((e.clientX - rect.left) * (cv.width / rect.width));
@@ -170,9 +140,14 @@
         document.getElementById('coords').innerText = `X: ${x}, Y: ${y}`;
     });
 
-    // Run on startup
-    load();
-</script>
+    // --- INITIAL LOAD ---
+    loadPixels();
+    checkCooldown();
 
+    // --- AUTO-UPDATE LOOP ---
+    // Updates every 15 seconds so you see other people's work
+    setInterval(loadPixels, 15000);
+
+</script>
 </body>
 </html>
